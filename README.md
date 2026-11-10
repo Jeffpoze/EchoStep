@@ -10,10 +10,11 @@ Put stems in `Song/` as `<name>.mp3`, with an optional second take `<name>1.mp3`
 
 | Stem | Rule |
 |---|---|
-| idle_ambient | 100% when step BPM < 60, ducks to 30% when walking |
+| *(standing still)* | all songs fade out and a 114 BPM metronome ticks, locked to the songs' beat grid; walking brings the music back in on that beat |
+| idle_ambient | 30% bed under the walking mix |
 | walk_groove | 0% → 100% as BPM rises from 60 → 114 |
-| radar_melody | gain by distance 300 m → 15 m; low-pass 250 Hz (facing away) → 8 kHz (within ±15°); pans toward the relic |
-| excavate_hype | fades in inside the 15 m zone; each shake boosts filter resonance; the cutoff opens as the dig progresses |
+| radar_melody | while walking: gain by distance 300 m → 15 m; low-pass 250 Hz (facing away) → 8 kHz (within ±15°); pans toward the relic |
+| excavate_hype | fades in inside the 15 m zone (even while standing still to dig); each shake boosts filter resonance; the cutoff opens as the dig progresses |
 
 Playback rate tracks cadence (0.92–1.08). The same rate is applied to all stems so they stay locked to each other. When a stem has two takes, the whole mix crossfades to the other take at the end of each loop. The drawer's **Music Stems** panel shows live levels and has a picker so you can audition any local MP3 for any stem.
 

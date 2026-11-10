@@ -58,6 +58,7 @@ class StemPanel extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             for (final stem in Stem.values) _row(context, stem),
+            _metronomeRow(),
             Align(
               alignment: Alignment.centerRight,
               child: TextButton.icon(
@@ -69,6 +70,33 @@ class StemPanel extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+
+  Widget _metronomeRow() {
+    final g = engine.muted ? 0.0 : engine.metronomeGain;
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 4, right: 56),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Metronome', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          Text(
+            g > 0.05 ? 'ticking at 114 BPM. Start walking to bring the music in' : 'muted while walking',
+            style: const TextStyle(fontSize: 11, color: SonicColors.textDim),
+          ),
+          const SizedBox(height: 4),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: LinearProgressIndicator(
+              value: g.clamp(0.0, 1.0),
+              minHeight: 5,
+              backgroundColor: SonicColors.grid,
+              valueColor: const AlwaysStoppedAnimation(SonicColors.magenta),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

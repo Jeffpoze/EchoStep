@@ -77,6 +77,12 @@ class StemEngine extends ChangeNotifier {
   double playbackRate = 1;
   double radarCutoff = 250;
 
+  /// Metronome: audible while standing still, gone once you walk.
+  AudioSource? _metroSource;
+  SoundHandle? _metroVoice;
+  double metronomeGain = 0;
+  double _metroTarget = 0;
+
   // ------------------------------------------------------------ setup
 
   /// Loads bundled stems (or synth fallbacks) and starts playback. Assumes
@@ -93,6 +99,7 @@ class StemEngine extends ChangeNotifier {
       for (final s in Stem.values) {
         _defaults[s] = List.of(takes[s]!);
       }
+      _metroSource = await _soloud.loadMem('metronome_${stemBpm.round()}.wav', renderMetronomeBar());
       ready = true;
       _startCycle(fadeIn: const Duration(milliseconds: 1200));
       _tick = Timer.periodic(const Duration(milliseconds: 100), (_) => _onTick());
@@ -204,7 +211,18 @@ class StemEngine extends ChangeNotifier {
       handles.add(h);
     }
 
-    // Sample-accurate synchronized start: unpause every stem in one call.
+    final oldMetro = _metroVoice;
+    final metroSrc = _metroSource;
+    if (metroSrc != null) {
+      final h = _soloud.play(metroSrc, volume: 0, paused: true, looping: true);
+      _soloud.setProtectVoice(h, true);
+      _soloud.setRelativePlaySpeed(h, playbackRate);
+      _metroVoice = h;
+      handles.add(h);
+    }
+
+    // Sample-accurate synchronized start: unpause every stem (and the
+    // metronome) in one call.
     final group = _soloud.createVoiceGroup();
     _soloud.addVoicesToGroup(group, handles);
     _soloud.setPause(group, false);
@@ -213,7 +231,9 @@ class StemEngine extends ChangeNotifier {
     for (final s in Stem.values) {
       _soloud.fadeVolume(_voices[s]!, muted ? 0 : gains[s]!, fadeIn);
     }
-    for (final h in old.values) {
+    final metro = _metroVoice;
+    if (metro != null) _soloud.fadeVolume(metro, _metroVolume, fadeIn);
+    for (final h in [...old.values, ?oldMetro]) {
       _fadeOutAndStop(h, _xfade);
     }
     _switching = false;
@@ -232,6 +252,12 @@ class StemEngine extends ChangeNotifier {
     if (!ready || _voices.isEmpty) return;
     _resonanceBoost *= 0.82; // shake resonance decays back down
     _computeTargets();
+    metronomeGain += (_metroTarget - metronomeGain) * 0.35;
+    final metro = _metroVoice;
+    if (metro != null && _soloud.getIsValidVoiceHandle(metro)) {
+      _soloud.fadeVolume(metro, _metroVolume, _ramp);
+      _soloud.fadeRelativePlaySpeed(metro, playbackRate, _ramp);
+    }
 
     for (final s in Stem.values) {
       final h = _voices[s]!;
@@ -284,6 +310,8 @@ class StemEngine extends ChangeNotifier {
     _resonanceBoost = math.min(_resonanceBoost + 5, 17);
   }
 
+  double get _metroVolume => muted ? 0 : metronomeGain * 0.7;
+
   double get _excavateCutoff => 700 + 7300 * _excavationProgress;
 
   double get _radarPan {
@@ -298,14 +326,18 @@ class StemEngine extends ChangeNotifier {
     final r = _reading;
     final excavating = _phase == GamePhase.excavating;
 
-    // 1. Idle ambient: full when still, ducks to 30% when walking.
-    gains[Stem.idleAmbient] = walking ? 0.3 : 1.0;
+    // Standing still: the songs drop out and a 114 BPM metronome keeps the
+    // pulse; walking brings the music back in on the same beat. The dig
+    // music still plays while you stand in the excavation zone.
+    // 1. Idle ambient: a 30% bed under the walking mix.
+    gains[Stem.idleAmbient] = walking ? 0.3 : 0.0;
     // 2. Walk groove: 0% at 60 BPM -> 100% at 114 BPM.
     gains[Stem.walkGroove] = ((bpm - 60) / (stemBpm - 60)).clamp(0.0, 1.0);
-    // 3. Radar melody: proximity 300 m -> 15 m drives gain.
-    gains[Stem.radarMelody] = r == null ? 0 : 0.05 + 0.95 * r.closeness;
+    // 3. Radar melody: proximity 300 m -> 15 m drives gain (walking only).
+    gains[Stem.radarMelody] = r == null || !walking ? 0 : 0.05 + 0.95 * r.closeness;
     // 4. Excavate hype: in only inside the 15 m zone.
     gains[Stem.excavateHype] = excavating ? 1.0 : 0.0;
+    _metroTarget = walking || excavating ? 0.0 : 1.0;
 
     // Cutoff 250 Hz (facing away) -> 8 kHz (within ±15°), exponential so the
     // sweep sounds even to the ear.
@@ -352,6 +384,10 @@ class StemEngine extends ChangeNotifier {
 
   void setMuted(bool m) {
     muted = m;
+    final metro = _metroVoice;
+    if (ready && metro != null && _soloud.getIsValidVoiceHandle(metro)) {
+      _soloud.fadeVolume(metro, _metroVolume, _ramp);
+    }
     notifyListeners();
   }
 

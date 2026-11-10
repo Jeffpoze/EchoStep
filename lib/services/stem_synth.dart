@@ -182,3 +182,27 @@ Float64List _excavateHype() {
   }
   return out;
 }
+
+/// One 4/4 bar of metronome clicks at [kStemBpm] (accented downbeat).
+/// Looped in the same voice group as the stems, so every click lands exactly
+/// on the songs' beat grid without any timers.
+Uint8List renderMetronomeBar() {
+  final barLen = (4 * _beatSec * _sr).round();
+  final out = Float64List(barLen);
+  final rng = math.Random(3);
+  for (var beat = 0; beat < 4; beat++) {
+    final accent = beat == 0;
+    final f = accent ? 1760.0 : 1180.0;
+    final clickLen = (_sr * 0.07).round();
+    final click = Float64List(clickLen);
+    for (var i = 0; i < clickLen; i++) {
+      final t = i / _sr;
+      final body = (Synth.sine(f * t) + 0.35 * Synth.sine(f * 2.76 * t)) * math.exp(-t * 70);
+      final tick = (rng.nextDouble() * 2 - 1) * math.exp(-t * 1500) * 0.3;
+      final fade = math.min(1.0, (clickLen - i) / (_sr * 0.008));
+      click[i] = (body + tick) * fade * (accent ? 1.0 : 0.7);
+    }
+    _mix(out, click, (beat * _beatSec * _sr).round(), 1);
+  }
+  return Synth.toWav(out, peak: 0.9);
+}
