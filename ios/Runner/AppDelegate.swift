@@ -1,3 +1,4 @@
+import AVFoundation
 import Flutter
 import UIKit
 import GoogleMaps
@@ -13,7 +14,21 @@ import GoogleMaps
        !key.isEmpty, !key.hasPrefix("$(") {
       GMSServices.provideAPIKey(key)
     }
+    configureAudioSession()
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  /// flutter_soloud leaves the audio session to the app. `.playback` keeps the
+  /// music going with the screen locked (with the `audio` background mode) and
+  /// ignores the ring/silent switch, like any music app.
+  private func configureAudioSession() {
+    let session = AVAudioSession.sharedInstance()
+    do {
+      try session.setCategory(.playback, mode: .default, options: [])
+      try session.setActive(true)
+    } catch {
+      NSLog("Sonic Seeker: audio session setup failed: \(error)")
+    }
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show Color;
 import 'package:geolocator/geolocator.dart';
 
 import '../utils/geo_math.dart';
@@ -37,9 +38,7 @@ class LocationService {
         return false;
       }
       gpsAvailable = true;
-      _sub = Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.bestForNavigation, distanceFilter: 1),
-      ).listen(
+      _sub = Geolocator.getPositionStream(locationSettings: _walkSettings()).listen(
         (p) {
           _lastReal = GeoPoint(p.latitude, p.longitude);
           if (!_simulated) onPosition(_lastReal!);
@@ -50,6 +49,42 @@ class LocationService {
     } catch (e) {
       onStatus('GPS unavailable: $e');
       return false;
+    }
+  }
+
+  /// GPS that keeps tracking with the screen locked (phone in your pocket).
+  static LocationSettings _walkSettings() {
+    const accuracy = LocationAccuracy.bestForNavigation;
+    const distanceFilter = 1;
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.iOS:
+        return AppleSettings(
+          accuracy: accuracy,
+          distanceFilter: distanceFilter,
+          activityType: ActivityType.fitness,
+          pauseLocationUpdatesAutomatically: false,
+          allowBackgroundLocationUpdates: true,
+          // Blue status-bar pill while tracking in the background.
+          showBackgroundLocationIndicator: true,
+        );
+      case TargetPlatform.android:
+        return AndroidSettings(
+          accuracy: accuracy,
+          distanceFilter: distanceFilter,
+          intervalDuration: const Duration(seconds: 1),
+          // Android needs a foreground service (visible notification) to keep
+          // GPS and the app alive while the screen is off.
+          foregroundNotificationConfig: const ForegroundNotificationConfig(
+            notificationTitle: 'Sonic Seeker is hunting',
+            notificationText: 'Tracking your walk to guide you to Sound Relics',
+            notificationChannelName: 'Relic hunt',
+            enableWakeLock: true,
+            setOngoing: true,
+            color: Color(0xFF00E5FF),
+          ),
+        );
+      default:
+        return const LocationSettings(accuracy: accuracy, distanceFilter: distanceFilter);
     }
   }
 

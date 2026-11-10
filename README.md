@@ -31,6 +31,11 @@ flutter run
 
 Without a Google Maps key the app uses OpenStreetMap tiles. If there's no GPS (desk, emulator, permission denied), it switches to **Desk Simulator Mode** on its own.
 
+## Phone in your pocket
+The app keeps running with the screen locked:
+- **iOS:** `UIBackgroundModes` audio + location, a `.playback` audio session (also plays with the silent switch on), and background GPS. A blue location pill shows while it's tracking in the background.
+- **Android:** a location foreground service with a "Sonic Seeker is hunting" notification (not tested yet).
+
 ## Desk Simulator (bottom drawer)
 - D-pad: moves you 10 m N/S/E/W
 - Heading slider: stands in for the compass
