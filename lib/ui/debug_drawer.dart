@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../config.dart';
 import '../game/game_controller.dart';
 import '../models/radar_reading.dart';
+import 'stem_panel.dart';
 import 'theme.dart';
 
 /// Bottom sheet with game actions, inventory and the Desk Simulator controls.
@@ -53,6 +54,8 @@ class DebugDrawer extends StatelessWidget {
               const SizedBox(height: 14),
               _Inventory(game: game),
               const SizedBox(height: 14),
+              StemPanel(engine: game.stems),
+              const SizedBox(height: 6),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 value: game.simulatorMode,

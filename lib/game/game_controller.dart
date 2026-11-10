@@ -11,6 +11,7 @@ import '../services/heading_service.dart';
 import '../services/location_service.dart';
 import '../services/motion_service.dart';
 import '../services/relic_spawner_service.dart';
+import '../services/stem_engine.dart';
 import '../utils/geo_math.dart';
 
 /// Central game state. Owns every service and exposes a single
@@ -24,6 +25,7 @@ class GameController extends ChangeNotifier {
 
   final RelicSpawnerService _spawner = RelicSpawnerService();
   final AudioRadarService audio = AudioRadarService();
+  final StemEngine stems = StemEngine();
   late final MotionService _motion;
   late final LocationService _location;
   late final HeadingService _heading;
@@ -48,7 +50,8 @@ class GameController extends ChangeNotifier {
 
   double get stepBpm => _motion.bpm;
   double get heading => _heading.heading;
-  double get tempoBpm => audio.tempoBpm;
+  /// Loop tempo the stems are currently playing at.
+  double get tempoBpm => StemEngine.stemBpm * stems.playbackRate;
   bool get muted => audio.muted;
   bool get hasCompass => _heading.hasSensor || simulatorMode;
   bool get gpsAvailable => _location.gpsAvailable;
@@ -60,6 +63,7 @@ class GameController extends ChangeNotifier {
 
   Future<void> init() async {
     await audio.init();
+    unawaited(stems.start());
     _motion.start();
     _heading.start();
     audio.start();
@@ -84,6 +88,7 @@ class GameController extends ChangeNotifier {
     _motion.dispose();
     _location.dispose();
     _heading.dispose();
+    stems.dispose();
     audio.dispose();
     super.dispose();
   }
@@ -121,6 +126,7 @@ class GameController extends ChangeNotifier {
     excavationProgress = (excavationProgress + kShakeProgressPerHit).clamp(0.0, 1.0);
     final step = (excavationProgress / kShakeProgressPerHit).round() - 1;
     HapticFeedback.heavyImpact();
+    stems.onShake();
     audio.playExcavationHit(excavationTarget!, step.clamp(0, 4));
     if (excavationProgress >= 0.999) {
       _unlock(excavationTarget!);
@@ -169,10 +175,9 @@ class GameController extends ChangeNotifier {
       phase = GamePhase.hunting;
     }
 
-    final target = reading?.target;
-    if (target != null) audio.prewarm(target);
     _motion.shakeDetectionEnabled = phase == GamePhase.excavating;
-    audio.update(reading: reading, stepBpm: _motion.bpm, phase: phase);
+    audio.update(reading: reading, phase: phase);
+    _pushMix();
     _changed();
   }
 
@@ -197,6 +202,7 @@ class GameController extends ChangeNotifier {
 
   void toggleMute() {
     audio.muted = !audio.muted;
+    stems.setMuted(audio.muted);
     _changed();
   }
 
@@ -241,7 +247,15 @@ class GameController extends ChangeNotifier {
     _location.teleportVirtual(GeoMath.offset(r.target.position, back, 20));
   }
 
+  void _pushMix() => stems.update(
+        stepBpm: _motion.bpm,
+        reading: reading,
+        phase: phase,
+        excavationProgress: excavationProgress,
+      );
+
   void _changed() {
+    _pushMix(); // cadence/progress changes reach the mixer even without a GPS fix
     if (!_disposed) notifyListeners();
   }
 }

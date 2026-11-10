@@ -65,7 +65,9 @@ class Synth {
   // late-80s sampler grit. Everything is synthesized from scratch.
 
   /// Deep boomy kick: sine with a fast pitch drop and a soft-clipped tail.
-  static Uint8List boomKick() {
+  static Uint8List boomKick() => _toWav(boomKickPcm(), peak: 0.95);
+
+  static Float64List boomKickPcm() {
     final n = _len(480);
     final out = Float64List(n);
     var phase = 0.0;
@@ -79,11 +81,13 @@ class Synth {
     }
     _crush(out);
     _fadeOut(out, 20);
-    return _toWav(out, peak: 0.95);
+    return out;
   }
 
   /// Cracking snare: tuned body + filtered noise with a short room tail.
-  static Uint8List boomSnare() {
+  static Uint8List boomSnare() => _toWav(boomSnarePcm(), peak: 0.9);
+
+  static Float64List boomSnarePcm() {
     final n = _len(260);
     final out = Float64List(n);
     var lp = 0.0;
@@ -97,11 +101,13 @@ class Synth {
     }
     _crush(out);
     _fadeOut(out, 15);
-    return _toWav(out, peak: 0.9);
+    return out;
   }
 
   /// Hi-hat. [open] gives a longer sizzle for the bar-end accent.
-  static Uint8List boomHat({bool open = false}) {
+  static Uint8List boomHat({bool open = false}) => _toWav(boomHatPcm(open: open), peak: 0.7);
+
+  static Float64List boomHatPcm({bool open = false}) {
     final n = _len(open ? 240 : 55);
     final out = Float64List(n);
     var lp = 0.0;
@@ -119,11 +125,13 @@ class Synth {
     }
     _crush(out);
     _fadeOut(out, 5);
-    return _toWav(out, peak: 0.7);
+    return out;
   }
 
   /// Warm, slightly overdriven bass note (sine + 2nd harmonic).
-  static Uint8List boomBass(double hz, {int durationMs = 340}) {
+  static Uint8List boomBass(double hz, {int durationMs = 340}) => _toWav(boomBassPcm(hz, durationMs: durationMs), peak: 0.85);
+
+  static Float64List boomBassPcm(double hz, {int durationMs = 340}) {
     final n = _len(durationMs);
     final out = Float64List(n);
     for (var i = 0; i < n; i++) {
@@ -133,7 +141,7 @@ class Synth {
     }
     _lowPass(out, 900);
     _fadeOut(out, 25);
-    return _toWav(out, peak: 0.85);
+    return out;
   }
 
   /// Rising synth stab for each excavation shake. [step] 0..4.
@@ -212,6 +220,8 @@ class Synth {
     }
   }
 
+  static void lowPass(Float64List s, double cutoff) => _lowPass(s, cutoff);
+
   static void _lowPass(Float64List s, double cutoff) {
     final dt = 1 / sampleRate;
     final rc = 1 / (2 * math.pi * cutoff);
@@ -247,6 +257,8 @@ class Synth {
       s[i] *= env;
     }
   }
+
+  static Uint8List toWav(Float64List samples, {double peak = 0.9}) => _toWav(samples, peak: peak);
 
   static Uint8List _toWav(Float64List samples, {double peak = 0.9}) {
     var max = 1e-9;

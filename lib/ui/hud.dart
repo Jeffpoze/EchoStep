@@ -27,7 +27,7 @@ class TopHud extends StatelessWidget {
               _Stat(
                 label: 'STEP BPM',
                 value: bpm > 0 ? bpm.round().toString() : '--',
-                sub: 'pulse ${game.tempoBpm.round()}',
+                sub: 'loop ${game.tempoBpm.round()}',
               ),
               const _Divider(),
               _Stat(

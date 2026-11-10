@@ -39,6 +39,9 @@ dependencies:
   sensors_plus: ^7.1.1
   flutter_compass: ^0.8.1
   flutter_soloud: ^5.2.3
+  file_picker: ^13.3.2
+  flutter_map: ^8.3.2
+  latlong2: ^0.10.1
 
 dev_dependencies:
   flutter_test:
@@ -56,6 +59,10 @@ dev_dependencies:
 
 # The following section is specific to Flutter packages.
 flutter:
+  # Suno stems: name.mp3 + name1.mp3/name2.mp3 takes. Missing stems fall
+  # back to synthesized loops, so the folder can be partially filled.
+  assets:
+    - Song/
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in

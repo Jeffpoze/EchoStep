@@ -7,6 +7,7 @@ import 'excavation_overlay.dart';
 import 'hud.dart';
 import 'map_view.dart';
 import 'radar_view.dart';
+import 'street_map_view.dart';
 import 'theme.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -22,8 +23,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   late final AnimationController _sweep =
       AnimationController(vsync: this, duration: const Duration(seconds: 3))..repeat();
 
-  /// Players can flip between the map and the radar canvas when Maps is enabled.
-  bool _showMap = kGoogleMapsEnabled;
+  /// Street map by default (Google Maps if a key is configured, otherwise
+  /// key-free OpenStreetMap tiles); the button flips to the radar canvas.
+  bool _showMap = true;
 
   @override
   void dispose() {
@@ -41,9 +43,15 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           // Center: map or fallback radar. Rebuilds only on structural changes.
           ListenableBuilder(
             listenable: game,
-            builder: (context, _) => _showMap && game.userPosition != null
-                ? SonicMapView(game: game, animation: _sweep)
-                : RadarView(game: game, animation: _sweep),
+            builder: (context, _) {
+              if (!_showMap || game.userPosition == null) return RadarView(game: game, animation: _sweep);
+              if (kGoogleMapsEnabled) return SonicMapView(game: game, animation: _sweep);
+              return StreetMapView(
+                game: game,
+                animation: _sweep,
+                bottomInset: MediaQuery.sizeOf(context).height * 0.12,
+              );
+            },
           ),
           ListenableBuilder(
             listenable: game,
@@ -67,7 +75,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                     child: Align(alignment: Alignment.topCenter, child: TopHud(game: game)),
                   ),
                 ),
-                if (kGoogleMapsEnabled)
+                if (game.userPosition != null)
                   Positioned(
                     right: 12,
                     bottom: MediaQuery.sizeOf(context).height * 0.12 + 12,
