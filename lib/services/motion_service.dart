@@ -36,6 +36,9 @@ class MotionService {
   double _bpm = 0;
   double get bpm => _bpm;
 
+  /// Time of the most recent (real or simulated) footstep.
+  DateTime get lastStepAt => _lastStep;
+
   bool sensorAvailable = true;
   bool get simulatingWalk => _simWalkTimer != null;
 

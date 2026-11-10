@@ -39,7 +39,7 @@ class StemPanel extends StatelessWidget {
               children: [
                 const Expanded(
                   child: Text(
-                    'MUSIC STEMS · 114 BPM',
+                    'MUSIC · ONE SONG AT A TIME',
                     style: TextStyle(fontSize: 11, letterSpacing: 1.5, color: SonicColors.textDim),
                   ),
                 ),
@@ -82,7 +82,7 @@ class StemPanel extends StatelessWidget {
         children: [
           const Text('Metronome', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
           Text(
-            g > 0.05 ? 'ticking at 114 BPM. Start walking to bring the music in' : 'muted while walking',
+            g > 0.05 ? 'stopped: ticking at 114 BPM, idle song after 10 s' : 'off',
             style: const TextStyle(fontSize: 11, color: SonicColors.textDim),
           ),
           const SizedBox(height: 4),
@@ -103,7 +103,7 @@ class StemPanel extends StatelessWidget {
   Widget _row(BuildContext context, Stem stem) {
     final ready = engine.ready;
     final take = ready ? engine.currentTake(stem) : null;
-    final gain = engine.gains[stem] ?? 0;
+    final gain = engine.levelOf(stem);
     final count = engine.takes[stem]!.length;
     final color = switch (take?.origin) {
       TakeOrigin.picked => SonicColors.magenta,

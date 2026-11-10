@@ -249,6 +249,7 @@ class GameController extends ChangeNotifier {
 
   void _pushMix() => stems.update(
         stepBpm: _motion.bpm,
+        lastStepAt: _motion.lastStepAt,
         reading: reading,
         phase: phase,
         excavationProgress: excavationProgress,

@@ -25,6 +25,12 @@ enum Stem {
 
 enum TakeOrigin { bundled, picked, synth }
 
+/// Which single song is playing.
+enum MusicState { metronome, idle, walk, radar, excavate }
+
+/// Walking within this distance of the nearest relic switches to radar_melody.
+const double kRadarSongMeters = 50;
+
 /// One playable take (version) of a stem.
 class StemTake {
   StemTake({required this.label, required this.source, required this.origin, required this.length});
@@ -34,15 +40,14 @@ class StemTake {
   final Duration length;
 }
 
-/// Hybrid Suno-stem + procedural engine.
+/// Situational Suno song player: exactly one song plays at a time, picked
+/// from what you're doing (see [_chooseSong]), with ~1.5 s crossfades.
 ///
-/// * All four stems start in the same audio frame (a SoLoud voice group is
-///   unpaused in one call), so they stay phase-locked.
-/// * Each stem has its own gain; radar and excavate also run through their
-///   own low-pass biquad, and radar has its own stereo pan.
-/// * When a stem has two takes (`name.mp3` and `name1.mp3`/`name2.mp3`), the
-///   whole mix crossfades to the other take at the end of every loop.
-/// * Any stem missing from `Song/` falls back to a synthesized 114 BPM loop.
+/// * Songs that aren't playing are paused, so each resumes where you left it.
+/// * radar_melody runs through a low-pass biquad + pan driven by the compass;
+///   excavate_hype through a resonant low-pass boosted by each shake.
+/// * A song with two takes (`name.mp3` + `name1.mp3`) alternates between them.
+/// * Any song missing from `Song/` falls back to a synthesized 114 BPM loop.
 class StemEngine extends ChangeNotifier {
   static const String assetDir = 'Song/';
   static const double stemBpm = kStemBpm; // 114
@@ -59,11 +64,21 @@ class StemEngine extends ChangeNotifier {
   bool ready = false;
   bool muted = false;
   String status = 'Loading stems…';
-  int cycle = 0;
-  bool _switching = false;
-  Stem? _referenceStem;
-  Duration _cycleLength = Duration.zero;
   Timer? _tick;
+  final Map<Stem, int> _takeIndex = {for (final s in Stem.values) s: 0};
+  final Map<Stem, bool> _paused = {};
+  final Map<Stem, double> _level = {for (final s in Stem.values) s: 0};
+  bool _metroPaused = true;
+
+  /// The one song (or the metronome) currently playing.
+  MusicState state = MusicState.metronome;
+  static const Duration _walkHold = Duration(milliseconds: 1600);
+  static const Duration _shakeHold = Duration(seconds: 4);
+  static const Duration _idleAfter = Duration(seconds: 10);
+  DateTime _lastStepAt = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastShakeAt = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime? _stillSince;
+  bool _nearRelic = false;
 
   // Live inputs.
   double _stepBpm = 0;
@@ -72,8 +87,11 @@ class StemEngine extends ChangeNotifier {
   double _excavationProgress = 0;
   double _resonanceBoost = 0;
 
-  /// Current target gains, exposed for the drawer's level meters.
+  /// Target gains per stem (only one is non-zero at a time).
   final Map<Stem, double> gains = {for (final s in Stem.values) s: 0};
+
+  /// Smoothed, actually-playing level per stem for the drawer's meters.
+  double levelOf(Stem s) => _level[s]!;
   double playbackRate = 1;
   double radarCutoff = 250;
 
@@ -101,7 +119,7 @@ class StemEngine extends ChangeNotifier {
       }
       _metroSource = await _soloud.loadMem('metronome_${stemBpm.round()}.wav', renderMetronomeBar());
       ready = true;
-      _startCycle(fadeIn: const Duration(milliseconds: 1200));
+      _startAll();
       _tick = Timer.periodic(const Duration(milliseconds: 100), (_) => _onTick());
     } catch (e, st) {
       debugPrint('StemEngine failed: $e\n$st');
@@ -167,146 +185,232 @@ class StemEngine extends ChangeNotifier {
 
   StemTake currentTake(Stem s) {
     final list = takes[s]!;
-    return list[cycle % list.length];
+    return list[_takeIndex[s]! % list.length];
   }
 
-  bool get _alternates => takes.values.any((l) => l.length > 1);
-
-  void _startCycle({Duration fadeIn = _xfade}) {
-    final old = Map<Stem, SoundHandle>.of(_voices);
+  /// Starts every song paused (only the active one becomes audible) plus the
+  /// metronome loop.
+  void _startAll() {
+    for (final h in [..._voices.values, ?_metroVoice]) {
+      _fadeOutAndStop(h, const Duration(milliseconds: 600));
+    }
     _voices.clear();
-
-    // The longest current take defines the loop; everything shorter loops inside it.
-    Stem ref = Stem.values.first;
+    _paused.clear();
     for (final s in Stem.values) {
-      if (currentTake(s).length > currentTake(ref).length) ref = s;
+      _takeIndex[s] = 0;
+      _launch(s, fadeIn: Duration.zero);
     }
-    _referenceStem = ref;
-    _cycleLength = currentTake(ref).length;
-
-    _computeTargets();
-    final handles = <SoundHandle>[];
-    for (final s in Stem.values) {
-      final take = currentTake(s);
-      if (s.filtered && _filterActivated.add(take.source.soundHash.hash)) {
-        // Per-source filters must be activated before the voice is created.
-        take.source.filters.biquadFilter.activate();
-      }
-      final h = _soloud.play(
-        take.source,
-        volume: 0,
-        paused: true,
-        // The reference stem plays once so its position marks the loop end.
-        looping: !(_alternates && s == ref),
-      );
-      _soloud.setProtectVoice(h, true);
-      _soloud.setRelativePlaySpeed(h, playbackRate);
-      if (s.filtered) {
-        final f = take.source.filters.biquadFilter;
-        f.type(soundHandle: h).value = 0; // LOWPASS
-        f.frequency(soundHandle: h).value = s == Stem.radarMelody ? radarCutoff : _excavateCutoff;
-        f.resonance(soundHandle: h).value = s == Stem.radarMelody ? 0.8 : 2;
-      }
-      _voices[s] = h;
-      handles.add(h);
-    }
-
-    final oldMetro = _metroVoice;
     final metroSrc = _metroSource;
     if (metroSrc != null) {
       final h = _soloud.play(metroSrc, volume: 0, paused: true, looping: true);
       _soloud.setProtectVoice(h, true);
-      _soloud.setRelativePlaySpeed(h, playbackRate);
       _metroVoice = h;
-      handles.add(h);
+      _metroPaused = true;
     }
+    _updateStatus();
+  }
 
-    // Sample-accurate synchronized start: unpause every stem (and the
-    // metronome) in one call.
-    final group = _soloud.createVoiceGroup();
-    _soloud.addVoicesToGroup(group, handles);
-    _soloud.setPause(group, false);
-    _soloud.destroyVoiceGroup(group);
-
-    for (final s in Stem.values) {
-      _soloud.fadeVolume(_voices[s]!, muted ? 0 : gains[s]!, fadeIn);
+  /// Creates a (paused) voice for the stem's current take. A stem with two
+  /// takes plays each once and then crossfades to the other; a single take loops.
+  void _launch(Stem s, {required Duration fadeIn}) {
+    final take = currentTake(s);
+    if (s.filtered && _filterActivated.add(take.source.soundHash.hash)) {
+      // Per-source filters must be activated before the voice is created.
+      take.source.filters.biquadFilter.activate();
     }
-    final metro = _metroVoice;
-    if (metro != null) _soloud.fadeVolume(metro, _metroVolume, fadeIn);
-    for (final h in [...old.values, ?oldMetro]) {
-      _fadeOutAndStop(h, _xfade);
+    final audible = _level[s]! > 0.001;
+    final h = _soloud.play(
+      take.source,
+      volume: 0,
+      paused: !audible,
+      looping: takes[s]!.length == 1,
+    );
+    _soloud.setProtectVoice(h, true);
+    _soloud.setRelativePlaySpeed(h, playbackRate);
+    if (s.filtered) {
+      final f = take.source.filters.biquadFilter;
+      f.type(soundHandle: h).value = 0; // LOWPASS
+      f.frequency(soundHandle: h).value = s == Stem.radarMelody ? radarCutoff : _excavateCutoff;
+      f.resonance(soundHandle: h).value = s == Stem.radarMelody ? 0.8 : 2;
     }
-    _switching = false;
-    final labels = Stem.values.map((s) => currentTake(s).label).toSet().join(', ');
-    status = _alternates ? 'Loop ${cycle + 1} · take ${String.fromCharCode(65 + cycle % 2)} · $labels' : labels;
-    notifyListeners();
+    _voices[s] = h;
+    _paused[s] = !audible;
+    if (audible) _soloud.fadeVolume(h, _volumeFor(s), fadeIn);
   }
 
   void _fadeOutAndStop(SoundHandle h, Duration d) {
     if (!_soloud.getIsValidVoiceHandle(h)) return;
+    _soloud.setPause(h, false);
     _soloud.fadeVolume(h, 0, d);
     _soloud.scheduleStop(h, d);
   }
 
+  double _volumeFor(Stem s) => muted ? 0 : _level[s]!;
+
   void _onTick() {
     if (!ready || _voices.isEmpty) return;
     _resonanceBoost *= 0.82; // shake resonance decays back down
-    _computeTargets();
-    metronomeGain += (_metroTarget - metronomeGain) * 0.35;
-    final metro = _metroVoice;
-    if (metro != null && _soloud.getIsValidVoiceHandle(metro)) {
-      _soloud.fadeVolume(metro, _metroVolume, _ramp);
-      _soloud.fadeRelativePlaySpeed(metro, playbackRate, _ramp);
+    _chooseSong();
+
+    // Smooth crossfade: each level eases toward its target (~1.5 s).
+    for (final s in Stem.values) {
+      _level[s] = _ease(_level[s]!, gains[s]!);
     }
+    metronomeGain = _ease(metronomeGain, _metroTarget);
 
     for (final s in Stem.values) {
-      final h = _voices[s]!;
-      if (!_soloud.getIsValidVoiceHandle(h)) continue;
-      _soloud.fadeVolume(h, muted ? 0 : gains[s]!, _ramp);
-      // Same rate on every stem keeps them phase-locked while tracking cadence.
-      _soloud.fadeRelativePlaySpeed(h, playbackRate, _ramp);
+      var h = _voices[s]!;
       final take = currentTake(s);
+
+      // Alternate takes when the current one is about to end (only matters
+      // while it's playing; a paused song resumes where you left it).
+      if (takes[s]!.length > 1 && _paused[s] == false) {
+        final ending = !_soloud.getIsValidVoiceHandle(h) ||
+            _soloud.getPosition(h) >= take.length - _xfade * playbackRate;
+        if (ending) {
+          _fadeOutAndStop(h, _xfade);
+          _takeIndex[s] = _takeIndex[s]! + 1;
+          _launch(s, fadeIn: _xfade);
+          h = _voices[s]!;
+          _updateStatus();
+          continue;
+        }
+      }
+      if (!_soloud.getIsValidVoiceHandle(h)) continue;
+
+      final audible = _level[s]! > 0.001;
+      if (audible && _paused[s] == true) {
+        _soloud.setPause(h, false);
+        _paused[s] = false;
+      } else if (!audible && _paused[s] == false) {
+        // Fully faded out: pause so it picks up where it left off next time.
+        _soloud.setPause(h, true);
+        _paused[s] = true;
+      }
+      if (!audible) continue;
+
+      _soloud.fadeVolume(h, _volumeFor(s), _ramp);
+      _soloud.fadeRelativePlaySpeed(h, playbackRate, _ramp);
       if (s == Stem.radarMelody) {
-        final f = take.source.filters.biquadFilter;
+        final f = currentTake(s).source.filters.biquadFilter;
         f.frequency(soundHandle: h).fadeFilterParameter(to: radarCutoff, time: _ramp);
         _soloud.setPan(h, _radarPan);
       } else if (s == Stem.excavateHype) {
-        final f = take.source.filters.biquadFilter;
+        final f = currentTake(s).source.filters.biquadFilter;
         f.frequency(soundHandle: h).fadeFilterParameter(to: _excavateCutoff, time: _ramp);
         f.resonance(soundHandle: h).fadeFilterParameter(to: (2 + _resonanceBoost).clamp(0.1, 20), time: _ramp);
       }
     }
 
-    // Alternate takes at the end of each loop.
-    if (_alternates && !_switching) {
-      final ref = _voices[_referenceStem]!;
-      final atEnd = !_soloud.getIsValidVoiceHandle(ref) ||
-          _soloud.getPosition(ref) >= _cycleLength - _xfade * playbackRate;
-      if (atEnd) {
-        _switching = true;
-        cycle++;
-        _startCycle();
+    final metro = _metroVoice;
+    if (metro != null && _soloud.getIsValidVoiceHandle(metro)) {
+      final audible = metronomeGain > 0.001;
+      if (audible == _metroPaused) {
+        _soloud.setPause(metro, !audible);
+        _metroPaused = !audible;
       }
+      if (audible) _soloud.fadeVolume(metro, _metroVolume, _ramp);
     }
     notifyListeners();
   }
 
-  // ------------------------------------------------------------ mix rules
+  static double _ease(double from, double to) {
+    final next = from + (to - from) * 0.2;
+    return (next - to).abs() < 0.002 ? to : next;
+  }
+
+  void _updateStatus() {
+    status = 'Now: ${activeLabel.toLowerCase()}';
+  }
+
+  // ------------------------------------------------------------ situations
+
+  /// One song at a time:
+  /// * shaking inside the 15 m zone -> excavate_hype
+  /// * walking within 50 m of the relic -> radar_melody (brighter/louder when facing it)
+  /// * walking -> walk_groove (from the very first footsteps)
+  /// * stopped -> metronome, then idle_ambient after 10 s
+  void _chooseSong() {
+    final now = DateTime.now();
+    final r = _reading;
+    final walking = now.difference(_lastStepAt) < _walkHold;
+    final shaking = _phase == GamePhase.excavating && now.difference(_lastShakeAt) < _shakeHold;
+    if (walking) _stillSince = null;
+    _stillSince ??= walking ? null : now;
+
+    // Radar range with hysteresis so GPS jitter at ~50 m doesn't flip songs.
+    if (r != null) {
+      if (r.distance <= kRadarSongMeters) _nearRelic = true;
+      if (r.distance > kRadarSongMeters + 10) _nearRelic = false;
+    } else {
+      _nearRelic = false;
+    }
+
+    final MusicState next;
+    if (shaking) {
+      next = MusicState.excavate;
+    } else if (walking) {
+      next = _nearRelic ? MusicState.radar : MusicState.walk;
+    } else if (_stillSince != null && now.difference(_stillSince!) >= _idleAfter) {
+      next = MusicState.idle;
+    } else {
+      next = MusicState.metronome;
+    }
+    if (next != state) {
+      state = next;
+      _updateStatus();
+    }
+
+    for (final s in Stem.values) {
+      gains[s] = 0;
+    }
+    _metroTarget = 0;
+    switch (state) {
+      case MusicState.metronome:
+        _metroTarget = 1;
+      case MusicState.idle:
+        gains[Stem.idleAmbient] = 1;
+      case MusicState.walk:
+        gains[Stem.walkGroove] = 1;
+      case MusicState.radar:
+        // Fades in as you turn toward the relic.
+        gains[Stem.radarMelody] = 0.35 + 0.65 * (r?.brightness ?? 0);
+      case MusicState.excavate:
+        gains[Stem.excavateHype] = 1;
+    }
+
+    // Cutoff 250 Hz (facing away) -> 8 kHz (within ±15°), exponential so the
+    // sweep sounds even to the ear.
+    radarCutoff = r == null ? 250 : 250 * math.pow(8000 / 250, r.brightness).toDouble();
+    // Songs follow your cadence within ±8% so they don't sound warped.
+    playbackRate = walking && _stepBpm >= 60 ? (_stepBpm / stemBpm).clamp(0.92, 1.08) : 1.0;
+  }
+
+  String get activeLabel => switch (state) {
+        MusicState.metronome => 'Metronome',
+        MusicState.idle => Stem.idleAmbient.label,
+        MusicState.walk => Stem.walkGroove.label,
+        MusicState.radar => Stem.radarMelody.label,
+        MusicState.excavate => Stem.excavateHype.label,
+      };
 
   void update({
     required double stepBpm,
+    required DateTime lastStepAt,
     required RadarReading? reading,
     required GamePhase phase,
     required double excavationProgress,
   }) {
     _stepBpm = stepBpm;
+    _lastStepAt = lastStepAt;
     _reading = reading;
     _phase = phase;
     _excavationProgress = excavationProgress;
   }
 
-  /// Each shake kicks the excavate filter's resonance up; it decays over ~1 s.
+  /// Each shake starts/keeps the dig music and kicks the filter resonance up.
   void onShake() {
+    _lastShakeAt = DateTime.now();
     _resonanceBoost = math.min(_resonanceBoost + 5, 17);
   }
 
@@ -320,37 +424,9 @@ class StemEngine extends ChangeNotifier {
     return (r.angleDelta / 90).clamp(-1.0, 1.0) * 0.8;
   }
 
-  void _computeTargets() {
-    final bpm = _stepBpm;
-    final walking = bpm >= 60;
-    final r = _reading;
-    final excavating = _phase == GamePhase.excavating;
-
-    // Standing still: the songs drop out and a 114 BPM metronome keeps the
-    // pulse; walking brings the music back in on the same beat. The dig
-    // music still plays while you stand in the excavation zone.
-    // 1. Idle ambient: a 30% bed under the walking mix.
-    gains[Stem.idleAmbient] = walking ? 0.3 : 0.0;
-    // 2. Walk groove: 0% at 60 BPM -> 100% at 114 BPM.
-    gains[Stem.walkGroove] = ((bpm - 60) / (stemBpm - 60)).clamp(0.0, 1.0);
-    // 3. Radar melody: proximity 300 m -> 15 m drives gain (walking only).
-    gains[Stem.radarMelody] = r == null || !walking ? 0 : 0.05 + 0.95 * r.closeness;
-    // 4. Excavate hype: in only inside the 15 m zone.
-    gains[Stem.excavateHype] = excavating ? 1.0 : 0.0;
-    _metroTarget = walking || excavating ? 0.0 : 1.0;
-
-    // Cutoff 250 Hz (facing away) -> 8 kHz (within ±15°), exponential so the
-    // sweep sounds even to the ear.
-    radarCutoff = r == null ? 250 : 250 * math.pow(8000 / 250, r.brightness).toDouble();
-
-    // Lock the loop tempo to cadence, within ±8% so it doesn't sound warped.
-    playbackRate = walking ? (bpm / stemBpm).clamp(0.92, 1.08) : 1.0;
-  }
-
   // ------------------------------------------------------------ audition
 
-  /// Replaces [stem]'s takes with a local MP3 picked by the user and restarts
-  /// the synced loop so you can hear it in context immediately.
+  /// Replaces [stem]'s takes with a local MP3 picked by the user.
   Future<void> auditionFile(Stem stem, {required String name, String? path, Uint8List? bytes}) async {
     try {
       final AudioSource src;
@@ -364,12 +440,19 @@ class StemEngine extends ChangeNotifier {
       takes[stem] = [
         StemTake(label: name, source: src, origin: TakeOrigin.picked, length: _soloud.getLength(src)),
       ];
-      cycle = 0;
-      _startCycle();
+      _replace(stem);
     } catch (e) {
       status = 'Could not load $name: $e';
       notifyListeners();
     }
+  }
+
+  void _replace(Stem stem) {
+    final old = _voices[stem];
+    if (old != null) _fadeOutAndStop(old, const Duration(milliseconds: 600));
+    _takeIndex[stem] = 0;
+    _launch(stem, fadeIn: const Duration(milliseconds: 600));
+    notifyListeners();
   }
 
   /// Drops picked files and goes back to the bundled stems / synth fallback.
@@ -377,16 +460,19 @@ class StemEngine extends ChangeNotifier {
     if (!ready) return;
     for (final s in Stem.values) {
       takes[s] = List.of(_defaults[s]!);
+      _replace(s);
     }
-    cycle = 0;
-    _startCycle();
   }
 
   void setMuted(bool m) {
     muted = m;
-    final metro = _metroVoice;
-    if (ready && metro != null && _soloud.getIsValidVoiceHandle(metro)) {
-      _soloud.fadeVolume(metro, _metroVolume, _ramp);
+    if (ready) {
+      for (final s in Stem.values) {
+        final h = _voices[s];
+        if (h != null && _soloud.getIsValidVoiceHandle(h)) _soloud.fadeVolume(h, _volumeFor(s), _ramp);
+      }
+      final metro = _metroVoice;
+      if (metro != null && _soloud.getIsValidVoiceHandle(metro)) _soloud.fadeVolume(metro, _metroVolume, _ramp);
     }
     notifyListeners();
   }

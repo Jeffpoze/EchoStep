@@ -6,17 +6,16 @@ A location-based audio treasure hunt. Your walking cadence drives a synthesized 
 Put stems in `Song/` as `<name>.mp3`, with an optional second take `<name>1.mp3` (any number works):
 `idle_ambient`, `walk_groove`, `radar_melody`, `excavate_hype`. Any stem that's missing falls back to a synthesized 114 BPM loop (`lib/services/stem_synth.dart`).
 
-`StemEngine` starts all four stems in the same audio frame (one SoLoud voice group), then mixes them live:
+`StemEngine` plays **one song at a time**, picked from what you're doing, with ~1.5 s crossfades:
 
-| Stem | Rule |
+| Situation | Song |
 |---|---|
-| *(standing still)* | all songs fade out and a 114 BPM metronome ticks, locked to the songs' beat grid; walking brings the music back in on that beat |
-| idle_ambient | 30% bed under the walking mix |
-| walk_groove | 0% → 100% as BPM rises from 60 → 114 |
-| radar_melody | while walking: gain by distance 300 m → 15 m; low-pass 250 Hz (facing away) → 8 kHz (within ±15°); pans toward the relic |
-| excavate_hype | fades in inside the 15 m zone (even while standing still to dig); each shake boosts filter resonance; the cutoff opens as the dig progresses |
+| Stopped (crosswalk, pause) | 114 BPM metronome, then `idle_ambient` after 10 s |
+| Footsteps detected | `walk_groove` (starts on your first steps, tempo follows cadence ±8%) |
+| Walking within 50 m of a relic | `radar_melody`: fades in and opens its low-pass (250 Hz → 8 kHz) as you face the relic, panned toward it |
+| Shaking inside the 15 m dig zone | `excavate_hype`: each shake boosts the filter resonance; the cutoff opens as the dig progresses |
 
-Playback rate tracks cadence (0.92–1.08). The same rate is applied to all stems so they stay locked to each other. When a stem has two takes, the whole mix crossfades to the other take at the end of each loop. The drawer's **Music Stems** panel shows live levels and has a picker so you can audition any local MP3 for any stem.
+Songs that aren't playing are paused, so each one picks up where you left it. A song with two takes alternates between them each time it ends. The drawer's **Music** panel shows which song is playing and has a picker to audition any local MP3 for any slot.
 
 The beacon pings, excavation stabs and unlock arpeggio are still synthesized in `lib/services/synth.dart`.
 
