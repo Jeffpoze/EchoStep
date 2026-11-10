@@ -1,0 +1,2 @@
+// Copy to MapsKey.xcconfig and insert your key, then run with --dart-define=MAPS_ENABLED=true
+MAPS_API_KEY=
